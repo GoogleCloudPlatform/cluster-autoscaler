@@ -11,19 +11,31 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""The plan of publish-releases.py: the delta between GitHub and releases.json."""
+"""The plan of publish-releases.py: the delta between GitHub and releases.json.
+
+Also used by the internal reconcile.py, to show in the CL proposing the manifest
+what happens to GitHub once it is merged.
+
+GitHub is read with the REST API, authenticated with GH_TOKEN when it is set,
+anonymously otherwise. Anonymous reads do not list draft releases.
+"""
 
 import dataclasses
 import enum
 import json
-import pathlib
-import subprocess
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
 from typing import Any
 
 import manifest
 import versions
 
 REPO = "GoogleCloudPlatform/cluster-autoscaler"
+API_URL = "https://api.github.com"
+NEXT_PAGE_PATTERN = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
 class ReleaseState(enum.Enum):
@@ -50,29 +62,32 @@ class Release:
         return self.version.tag
 
 
-def gh(*args: str) -> str:
-    return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
+def gh_request(url: str) -> tuple[Any, str | None]:
+    """Returns the decoded body and the URL of the next page"""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "cluster-autoscaler-release-tooling"}
+    if os.environ.get("GH_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['GH_TOKEN']}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:
+        match = NEXT_PAGE_PATTERN.search(response.headers.get("Link") or "")
+        return json.loads(response.read().decode()), match.group(1) if match else None
 
 
 def gh_api(endpoint: str) -> Any:
-    return json.loads(gh("api", endpoint))
+    return gh_request(f"{API_URL}/{endpoint}")[0]
 
 
 def gh_api_list(endpoint: str) -> list[Any]:
-    """'gh api --paginate' prints the pages back to back."""
-    output = gh("api", "--paginate", endpoint).strip()
-    items, decoder, position = [], json.JSONDecoder(), 0
-    while position < len(output):
-        page, position = decoder.raw_decode(output, position)
+    url: str | None = f"{API_URL}/{endpoint}?per_page=100"
+    items: list[Any] = []
+    while url:
+        page, url = gh_request(url)
         items.extend(page)
-        while position < len(output) and output[position].isspace():
-            position += 1
     return items
 
 
-def load_releases(path: pathlib.Path, github_states: dict[str, ReleaseState]) -> list[Release]:
+def load_releases(loaded: manifest.Manifest, github_states: dict[str, ReleaseState]) -> list[Release]:
     """Returns the releases of the manifest, oldest version first."""
-    tags = manifest.Manifest.loads(path.read_text(), str(path)).tags()
+    tags = loaded.tags()
     highest = tags[-1][0] if tags else None
     previous_by_track: dict[str, versions.Version] = {}
     releases = []
@@ -111,8 +126,12 @@ def list_tags() -> dict[str, str]:
 
 
 def latest_release() -> str | None:
-    result = subprocess.run(["gh", "api", f"repos/{REPO}/releases/latest"], capture_output=True, text=True)
-    return json.loads(result.stdout)["tag_name"] if result.returncode == 0 else None
+    try:
+        return gh_api(f"repos/{REPO}/releases/latest")["tag_name"]
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        return None
 
 
 def list_releases() -> dict[str, ReleaseState]:
@@ -131,7 +150,14 @@ def list_releases() -> dict[str, ReleaseState]:
 
 
 def commit_exists(commit: str) -> bool:
-    return subprocess.run(["gh", "api", f"repos/{REPO}/commits/{commit}"], capture_output=True).returncode == 0
+    try:
+        gh_api(f"repos/{REPO}/commits/{commit}")
+    except urllib.error.HTTPError as e:
+        # 422: a well-formed sha GitHub does not have.
+        if e.code not in (404, 422):
+            raise
+        return False
+    return True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -207,3 +233,37 @@ def make_plan(releases: list[Release], existing_tags: dict[str, str]) -> Plan:
             case ReleaseState.LATEST:
                 latest = release
     return Plan(missing_tags=missing_tags, draft=draft, regular=regular, latest=latest)
+
+
+def check_conflicts(releases: list[Release], existing_tags: dict[str, str]) -> None:
+    conflicts = [
+        release
+        for release in releases
+        if release.tag in existing_tags and existing_tags[release.tag] != release.github_commit
+    ]
+    for release in conflicts:
+        print(
+            f">>> Conflict: {release.tag} exists at {existing_tags[release.tag]}, "
+            f"manifest says {release.github_commit}",
+            file=sys.stderr,
+        )
+    if conflicts:
+        raise versions.ErrorOccurred("tags are never moved, resolve the conflicts above manually")
+
+
+def plan_manifest(loaded: manifest.Manifest) -> tuple[Plan, str]:
+    """Returns the plan bringing GitHub in line with the manifest, and its rendering."""
+    existing_tags = list_tags()
+    github_states = list_releases()
+    print(f">>> {REPO}: {len(existing_tags)} release tags, {len(github_states)} releases.")
+    if not os.environ.get("GH_TOKEN"):
+        print(">>> Warning: reading GitHub anonymously, release tags without a release are assumed to be drafts.")
+        github_states = {tag: ReleaseState.DRAFT for tag in existing_tags} | github_states
+    releases = load_releases(loaded, github_states)
+    print(f">>> Manifest: {len(releases)} releases.")
+
+    check_conflicts(releases, existing_tags)
+
+    plan = make_plan(releases, existing_tags)
+    current_latest = next((tag for tag, state in github_states.items() if state is ReleaseState.LATEST), None)
+    return plan, plan.format(current_latest)
