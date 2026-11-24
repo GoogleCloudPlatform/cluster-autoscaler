@@ -4297,8 +4297,9 @@ func (m *AutoprovisioningNodeGroupManager) clusterProject() string {
 // one at random - with replacement, since previously created node pools are not taken into account.
 // The result is repeated collisions on the same sub-block. See b/564377355.
 //
-// This only applies to dynamic slicing node groups, see reservations.RequiresWholeSubBlock. Which
-// node groups count as already occupying a sub-block is decided by reservations.ClaimedSubBlocks.
+// This only applies to node groups that need a whole sub-block (dynamic slicing node groups and
+// slices as large as a sub-block), see reservations.RequiresWholeSubBlock. Which node groups count
+// as already occupying a sub-block is decided by reservations.ClaimedSubBlocks.
 //
 // Note that this only gates the node pools NAP is about to create. Node pools that already exist
 // and happen to share a sub-block (e.g. created manually, or by an earlier NAP run predating this

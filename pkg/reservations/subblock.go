@@ -58,20 +58,28 @@ func TargetedSubBlock(ng cloudprovider.NodeGroup, clusterProject string) string 
 	return subBlocks[0]
 }
 
-// RequiresWholeSubBlock reports whether ng is a dynamic slicing node group (under a PROVISION_ONLY
-// workload policy). GCE requires a PROVISION_ONLY MIG to span a full reservation sub-block (1:1
-// mapping, e.g. 4x4x4 on tpu7x), so it can never share one with any other node group. Static slices
-// (AUTO_CONNECT or no workload policy) may legitimately occupy part of a sub-block or span several,
-// so they are not subject to that constraint.
+// RequiresWholeSubBlock reports whether ng needs a reservation sub-block to itself.
+//
+// That is the case for a dynamic slicing node group (under a PROVISION_ONLY workload policy): GCE
+// requires a PROVISION_ONLY MIG to span a full reservation sub-block (1:1 mapping, e.g. 4x4x4 on
+// tpu7x). It is also the case for a static slice as large as a sub-block (e.g. 1x72 on A4X, or
+// 4x4x4 on tpu7x under an AUTO_CONNECT policy), which leaves no room for another node group.
+//
+// Smaller static slices (e.g. 1x4 on A4X) may legitimately occupy part of a sub-block, and static
+// slices may span several, so they are not subject to that constraint.
 func RequiresWholeSubBlock(ng cloudprovider.NodeGroup) bool {
 	gkeNg, ok := ng.(gke.NodeGroup)
-	return ok && gkeNg.GetMig() != nil && gkeNg.GetMig().IsProvisionOnly()
+	if !ok || gkeNg.GetMig() == nil {
+		return false
+	}
+	mig := gkeNg.GetMig()
+	return mig.IsProvisionOnly() || mig.FillsWholeSubBlock()
 }
 
 // ClaimedSubBlocks returns the canonicalized paths of all reservation sub-blocks targeted by any
-// of nodeGroups, regardless of their kind: a dynamic slicing node group needs the whole sub-block,
-// so anything already sitting on a given sub-block is enough to rule that sub-block out for a
-// dynamic slicing node group.
+// of nodeGroups, regardless of their kind: a node group that requires the whole sub-block (see
+// RequiresWholeSubBlock) can't share it, so anything already sitting on a given sub-block is enough
+// to rule that sub-block out for such a node group.
 func ClaimedSubBlocks(nodeGroups []cloudprovider.NodeGroup, clusterProject string) sets.Set[string] {
 	claimed := sets.New[string]()
 	for _, ng := range nodeGroups {

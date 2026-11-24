@@ -179,6 +179,13 @@ func (f MachineFamily) Name() string {
 	return f.name
 }
 
+// SubBlockHostCount returns the number of hosts in one reservation sub-block of the machine family,
+// and false if it is not known.
+func (f MachineFamily) SubBlockHostCount() (int64, bool) {
+	count, found := subBlockHostCounts[f.name]
+	return count, found
+}
+
 // Equal checks whether f is the same as otherFamily.
 func (f MachineFamily) Equal(otherFamily MachineFamily) bool {
 	return f.In(otherFamily)

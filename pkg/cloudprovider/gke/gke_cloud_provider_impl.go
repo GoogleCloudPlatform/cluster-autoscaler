@@ -2293,6 +2293,49 @@ func (mig *GkeMig) IsProvisionOnly() bool {
 	return pulled.WorkloadPolicy.AcceleratorTopologyMode == gceclient.AcceleratorTopologyModeProvisionOnly
 }
 
+// FillsWholeSubBlock returns whether the mig is a slice spanning as many hosts as one reservation
+// sub-block of its machine family, e.g. 1x72 on A4X or 4x4x4 on tpu7x.
+//
+// Such a slice can't share its sub-block with any other node group, whatever the accelerator
+// topology mode of its workload policy.
+func (mig *GkeMig) FillsWholeSubBlock() bool {
+	if mig.spec == nil || mig.gkeManager == nil {
+		return false
+	}
+	provider := mig.MachineConfigProvider()
+	machineFamily, err := provider.GetMachineFamilyFromMachineName(mig.spec.MachineType)
+	if err != nil {
+		return false
+	}
+	subBlockHosts, found := machineFamily.SubBlockHostCount()
+	if !found {
+		return false
+	}
+	topology := mig.sliceTopology()
+	if topology == "" {
+		return false
+	}
+	sliceHosts, err := provider.NumNodesFromTopology(mig.spec.MachineType, topology)
+	return err == nil && sliceHosts == subBlockHosts
+}
+
+// sliceTopology returns the accelerator topology of the mig's slice, or "" if it is not known.
+//
+// It reads the workload policy NAP embeds in the spec, then the ResourcePolicyPuller cache for
+// existing node pools, whose specs only carry the policy name (see IsProvisionOnly), and finally the
+// TPU topology of the node pool.
+func (mig *GkeMig) sliceTopology() string {
+	if embedded := mig.spec.PlacementGroup.ResourcePolicy; embedded != nil && embedded.WorkloadPolicy.AcceleratorTopology != "" {
+		return embedded.WorkloadPolicy.AcceleratorTopology
+	}
+	if policyName := mig.spec.PlacementGroup.Policy; policyName != "" {
+		if pulled := mig.gkeManager.GetPulledResourcePolicy(mig.gceRef.Project, policyName); pulled != nil && pulled.WorkloadPolicy.AcceleratorTopology != "" {
+			return pulled.WorkloadPolicy.AcceleratorTopology
+		}
+	}
+	return mig.spec.TpuTopology
+}
+
 // ResizeAtomically returns whether the mig should be resized atomically.
 func (mig *GkeMig) ResizeAtomically() bool {
 	if mig.spec == nil {

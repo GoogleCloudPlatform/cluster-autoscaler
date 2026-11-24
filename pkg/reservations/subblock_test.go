@@ -18,8 +18,10 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
@@ -132,6 +134,31 @@ func TestRequiresWholeSubBlock(t *testing.T) {
 			want:      false,
 		},
 		{
+			name:      "a4x_1x72_auto_connect_requires_whole_sub_block",
+			nodeGroup: a4xSliceMig("1x72", "AUTO_CONNECT"),
+			want:      true,
+		},
+		{
+			name:      "a4x_1x72_without_topology_mode_requires_whole_sub_block",
+			nodeGroup: a4xSliceMig("1x72", ""),
+			want:      true,
+		},
+		{
+			name:      "a4x_1x4_does_not_require_whole_sub_block",
+			nodeGroup: a4xSliceMig("1x4", "AUTO_CONNECT"),
+			want:      false,
+		},
+		{
+			name:      "tpu7x_4x4x4_without_workload_policy_requires_whole_sub_block",
+			nodeGroup: tpu7xSliceMig("4x4x4"),
+			want:      true,
+		},
+		{
+			name:      "tpu7x_2x2x4_without_workload_policy_does_not_require_whole_sub_block",
+			nodeGroup: tpu7xSliceMig("2x2x4"),
+			want:      false,
+		},
+		{
 			name:      "non-GKE node group",
 			nodeGroup: &nodeGroupWithoutSpec{},
 			want:      false,
@@ -145,6 +172,30 @@ func TestRequiresWholeSubBlock(t *testing.T) {
 			}
 		})
 	}
+}
+
+// a4xSliceMig returns an A4X Max node group under a workload policy with the given topology and
+// topology mode, as NAP embeds the policy in the spec of a node group it is about to create.
+func a4xSliceMig(topology, topologyMode string) *gke.GkeMig {
+	return gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+		MachineType: "a4x-maxgpu-4g-metal",
+		PlacementGroup: placement.Spec{
+			Policy: "wp",
+			ResourcePolicy: &gceclient.GceResourcePolicy{
+				WorkloadPolicy: gceclient.WorkloadPolicy{
+					AcceleratorTopology:     topology,
+					AcceleratorTopologyMode: topologyMode,
+				},
+			},
+		},
+	}).Build()
+}
+
+func tpu7xSliceMig(topology string) *gke.GkeMig {
+	return gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+		MachineType: "tpu7x-standard-4t",
+		TpuTopology: topology,
+	}).Build()
 }
 
 func TestClaimedSubBlocks(t *testing.T) {
