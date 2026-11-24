@@ -3345,6 +3345,21 @@ var LocalSSDDiskSizes = map[string]uint64{
 	"z3-highmem-192-highlssd-metal": 6000,
 }
 
+// subBlockHostCounts maps the machine families whose slices can fill a reservation sub-block to the
+// number of hosts in one sub-block. The a4x value matches supported_sub_block_size in the GCE VM
+// family SoT (configs/cloud/cluster/vmfamilies/sot/), which has no sub-block size for tpu7x.
+//
+// TODO(b/444663200): this is a stopgap while CA has no sub-block data at provisioning time. Replace
+// it with the sub-block sizes from the GCE VM family SoT once it covers every family listed here, or
+// remove it once ListConsumableReservations returns sub-blocks
+// (go/list-consumable-api-subblocks-proposal).
+var subBlockHostCounts = map[string]int64{
+	// One NVL72 domain: 18 hosts with 4 GPUs each.
+	A4X.Name(): 18,
+	// One 4x4x4 cube: 16 hosts with 4 chips each.
+	TPU7X.Name(): 16,
+}
+
 func pInt64(i int64) *int64 {
 	t1 := i
 	return &t1

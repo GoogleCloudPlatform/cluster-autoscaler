@@ -3598,3 +3598,82 @@ func TestIsProvisionOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestFillsWholeSubBlock(t *testing.T) {
+	const (
+		project          = "test-project"
+		policyName       = "wp"
+		a4xMachineType   = "a4x-maxgpu-4g-metal"
+		tpu7xMachineType = "tpu7x-standard-4t"
+	)
+	topologyPolicy := func(topology string) *gceclient.GceResourcePolicy {
+		return &gceclient.GceResourcePolicy{Name: policyName, Status: "READY", WorkloadPolicy: gceclient.WorkloadPolicy{AcceleratorTopology: topology}}
+	}
+
+	testCases := []struct {
+		name   string
+		spec   *gkeclient.NodePoolSpec
+		pulled []*gceclient.GceResourcePolicy
+		want   bool
+	}{
+		{
+			name: "no_spec",
+			want: false,
+		},
+		{
+			name: "a4x_1x72_from_embedded_policy",
+			spec: &gkeclient.NodePoolSpec{MachineType: a4xMachineType, PlacementGroup: placement.Spec{Policy: policyName, ResourcePolicy: topologyPolicy("1x72")}},
+			want: true,
+		},
+		{
+			name:   "a4x_embedded_1x4_wins_over_puller",
+			spec:   &gkeclient.NodePoolSpec{MachineType: a4xMachineType, PlacementGroup: placement.Spec{Policy: policyName, ResourcePolicy: topologyPolicy("1x4")}},
+			pulled: []*gceclient.GceResourcePolicy{topologyPolicy("1x72")},
+			want:   false,
+		},
+		{
+			name:   "a4x_existing_node_pool_puller_hit_1x72",
+			spec:   &gkeclient.NodePoolSpec{MachineType: a4xMachineType, PlacementGroup: placement.Spec{Policy: policyName}},
+			pulled: []*gceclient.GceResourcePolicy{topologyPolicy("1x72")},
+			want:   true,
+		},
+		{
+			name: "a4x_existing_node_pool_puller_miss",
+			spec: &gkeclient.NodePoolSpec{MachineType: a4xMachineType, PlacementGroup: placement.Spec{Policy: policyName}},
+			want: false,
+		},
+		{
+			name: "tpu7x_4x4x4_from_tpu_topology",
+			spec: &gkeclient.NodePoolSpec{MachineType: tpu7xMachineType, TpuTopology: "4x4x4"},
+			want: true,
+		},
+		{
+			name: "tpu7x_2x2x4_smaller_than_sub_block",
+			spec: &gkeclient.NodePoolSpec{MachineType: tpu7xMachineType, TpuTopology: "2x2x4"},
+			want: false,
+		},
+		{
+			name: "family_without_known_sub_block_size",
+			spec: &gkeclient.NodePoolSpec{MachineType: "ct6e-standard-4t", TpuTopology: "4x4"},
+			want: false,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gkeManager := &gkeManagerImpl{
+				projectId:             project,
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+			}
+			gkeManager.SetResourcePolicyPuller(placement.NewFakeResourcePolicyPullerProvider(tc.pulled, nil))
+			mig := &GkeMig{
+				gceRef:     gce.GceRef{Project: project, Zone: "us-central1-c", Name: "mig"},
+				gkeManager: gkeManager,
+				spec:       tc.spec,
+			}
+
+			if got := mig.FillsWholeSubBlock(); got != tc.want {
+				t.Errorf("FillsWholeSubBlock() with spec %+v = %v, want %v", tc.spec, got, tc.want)
+			}
+		})
+	}
+}
