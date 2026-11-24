@@ -16,6 +16,7 @@ package providers
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -531,6 +532,62 @@ func TestResizingEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestResizableVmAutoprovisioningProviderConcurrentRefreshAndReads(t *testing.T) {
+	em := experiments.NewMockManagerWithOptions(version.Version{}, nil, nil)
+	provider, err := NewResizableVmAutoprovisioningProvider(
+		fake.NewSimpleClientset(),
+		machinetypes.NewMachineConfigProvider(nil),
+		em,
+		ResizableVmAutoprovisioningFlags{
+			AutopilotEnabled:         true,
+			EkAutoprovisioning:       string(resizable_vm_types.EkAutoprovisioningEnabledCoarseGrainedResize),
+			E4Autoprovisioning:       string(resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize),
+			E4aAutoprovisioning:      string(resizable_vm_types.E4aAutoprovisioningEnabledCoarseGrainedResize),
+			EkOnManagedNodesEnabled:  true,
+			E4OnManagedNodesEnabled:  true,
+			E4aOnManagedNodesEnabled: true,
+		},
+		noopResizableVmMetrics{},
+	)
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
+	provider.RegisterNodesCountProvider(fakeStructNodesCountProvider{counts: map[string]int{"ek": 1, "e4": 2, "e4a": 1}})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			provider.Refresh()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			for _, family := range []string{"ek", "e4", "e4a"} {
+				_ = provider.ResizingEnabled(family)
+				_ = provider.IsResizableVmEnabledInAutopilot(family)
+				_ = provider.IsResizableVmWithinPodFamilyEnabled(family)
+				_ = provider.NodesCount(family)
+			}
+			_ = provider.IsExtendedFallbacksEnabled()
+			_ = provider.IsE4StatefulEnabledInAutopilot()
+			_ = provider.IsE4PrioritizationEnabledInAutopilot()
+			_ = provider.HasActiveResizableNodes()
+		}
+	}()
+	wg.Wait()
+
+	assert.True(t, provider.ResizingEnabled("ek"))
+	assert.True(t, provider.HasActiveResizableNodes())
+}
+
+type noopResizableVmMetrics struct{}
+
+func (noopResizableVmMetrics) UpdateResizableVmLaunchStatus(string, string, string)      {}
+func (noopResizableVmMetrics) UpdateResizableVmAutopilotComputeClassStatus(string, bool) {}
 
 type mockResizableVmMetrics struct {
 	mock.Mock
