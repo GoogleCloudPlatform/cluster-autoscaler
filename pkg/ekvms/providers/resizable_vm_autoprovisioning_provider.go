@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	clientset "k8s.io/client-go/kubernetes"
@@ -43,11 +44,13 @@ type autoprovisioningProvider interface {
 }
 
 type ResizableVmAutoprovisioningProvider struct {
-	machineConfigProvider     *machinetypes.MachineConfigProvider
-	clientSet                 clientset.Interface
+	machineConfigProvider *machinetypes.MachineConfigProvider
+	clientSet             clientset.Interface
+	balloonPodChecker     *balloonPodChecker
+	countProvider         nodesCountProvider
+
+	mu                        sync.RWMutex
 	autoprovisioningProviders map[string]autoprovisioningProvider
-	balloonPodChecker         *balloonPodChecker
-	countProvider             nodesCountProvider
 }
 
 // ResizableVmAutoprovisioningFlags groups the CLI flags configuring autoprovisioning of resizable VMs per machine family.
@@ -112,12 +115,16 @@ func (p *ResizableVmAutoprovisioningProvider) Run(ctx context.Context) {
 // Refresh refreshes dynamic configuration values for EK launch. It's important that
 // Refresh is called one per loop and config is cached for the duration of the loop to guarantee consistency within a loop.
 func (p *ResizableVmAutoprovisioningProvider) Refresh() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	for _, provider := range p.autoprovisioningProviders {
 		provider.refresh()
 	}
 }
 
 func (p *ResizableVmAutoprovisioningProvider) IsExtendedFallbacksEnabled() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	e4Provider, ok := p.autoprovisioningProviders[machinetypes.E4.Name()].(*e4AutoprovisioningProvider)
 	if ok {
 		return e4Provider.extendedFallbacksEnabled()
@@ -126,6 +133,8 @@ func (p *ResizableVmAutoprovisioningProvider) IsExtendedFallbacksEnabled() bool 
 }
 
 func (p *ResizableVmAutoprovisioningProvider) IsResizableVmEnabledInAutopilot(machineFamily string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	provider, found := p.autoprovisioningProviders[machineFamily]
 	if !found {
 		return false
@@ -134,6 +143,8 @@ func (p *ResizableVmAutoprovisioningProvider) IsResizableVmEnabledInAutopilot(ma
 }
 
 func (p *ResizableVmAutoprovisioningProvider) IsE4StatefulEnabledInAutopilot() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	e4Provider, ok := p.autoprovisioningProviders[machinetypes.E4.Name()].(*e4AutoprovisioningProvider)
 	if ok {
 		return (e4Provider.isEnabledInAutopilot() || e4Provider.managedNodesEnabled()) && e4Provider.isStatefulEnabled
@@ -142,6 +153,8 @@ func (p *ResizableVmAutoprovisioningProvider) IsE4StatefulEnabledInAutopilot() b
 }
 
 func (p *ResizableVmAutoprovisioningProvider) IsE4PrioritizationEnabledInAutopilot() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	e4Provider, ok := p.autoprovisioningProviders[machinetypes.E4.Name()].(*e4AutoprovisioningProvider)
 	if ok {
 		return e4Provider.isPrioritizationEnabled
@@ -150,6 +163,8 @@ func (p *ResizableVmAutoprovisioningProvider) IsE4PrioritizationEnabledInAutopil
 }
 
 func (p *ResizableVmAutoprovisioningProvider) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	provider, found := p.autoprovisioningProviders[machineFamily]
 	if !found {
 		return false
@@ -158,6 +173,8 @@ func (p *ResizableVmAutoprovisioningProvider) IsResizableVmWithinPodFamilyEnable
 }
 
 func (p *ResizableVmAutoprovisioningProvider) ResizingEnabled(machineFamily string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	provider, found := p.autoprovisioningProviders[machineFamily]
 	if !found {
 		return false
@@ -169,6 +186,8 @@ func (p *ResizableVmAutoprovisioningProvider) MachineConfigProvider() *machinety
 	return p.machineConfigProvider
 }
 
+// RegisterNodesCountProvider wires countProvider during single-threaded startup
+// before background goroutines are started.
 func (p *ResizableVmAutoprovisioningProvider) RegisterNodesCountProvider(countProvider nodesCountProvider) {
 	p.countProvider = countProvider
 }
