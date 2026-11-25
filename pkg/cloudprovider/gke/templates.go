@@ -287,10 +287,13 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 }
 
 // BuildNodeFromTemplate builds node based on GCE instance template and kube-env.
-func (t *GkeTemplateBuilder) BuildNodeFromTemplate(ctx context.Context, mig gce.Mig, migOsInfo gce.MigOsInfo, template *gce_api.InstanceTemplate, kubeEnv gce.KubeEnv, cpu int64, mem int64, pods *int64, reserved gce.OsReservedCalculator, localSSDSizeProvider localssdsize.LocalSSDSizeProvider) (*apiv1.Node, error) {
+func (t *GkeTemplateBuilder) BuildNodeFromTemplate(ctx context.Context, mig gce.Mig, migOsInfo *GkeMigOsInfo, template *gce_api.InstanceTemplate, kubeEnv gce.KubeEnv, cpu int64, mem int64, pods *int64, reserved gce.OsReservedCalculator, localSSDSizeProvider localssdsize.LocalSSDSizeProvider) (*apiv1.Node, error) {
 	node, err := t.GceTemplateBuilder.BuildNodeFromTemplate(ctx, mig, migOsInfo, template, kubeEnv, cpu, mem, pods, reserved, localSSDSizeProvider)
 	if err != nil {
 		return nil, err
+	}
+	if migOsInfo != nil && migOsInfo.NodeVersion() != "" {
+		node.Status.NodeInfo.KubeletVersion = migOsInfo.NodeVersion()
 	}
 	rawCapGb, found := kubeEnv.Var(ephemeralLocalSsdCapacityGbKubeEnvVar)
 	if !found || strings.TrimSpace(rawCapGb) == "" {

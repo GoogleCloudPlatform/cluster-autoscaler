@@ -2002,3 +2002,57 @@ func TestBuildNodeFromTemplate_PureBlockMode(t *testing.T) {
 	_, hasEphemeral := node.Labels[gkelabels.EphemeralLocalSsdLabel]
 	assert.False(t, hasEphemeral)
 }
+
+func TestBuildNodeFromTemplate_NodeVersion(t *testing.T) {
+	testCases := []struct {
+		name               string
+		nodeVersion        string
+		wantKubeletVersion string
+	}{
+		{
+			name:               "node_version_set",
+			nodeVersion:        "1.34.9-gke.1655001",
+			wantKubeletVersion: "1.34.9-gke.1655001",
+		},
+		{
+			name:               "node_version_empty",
+			nodeVersion:        "",
+			wantKubeletVersion: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mig := &GkeMig{
+				gceRef: gce.GceRef{
+					Name:    "test-pool",
+					Project: "my-project",
+					Zone:    "us-central1-b",
+				},
+			}
+			template := &gce_api.InstanceTemplate{
+				Name: "test-template",
+				Properties: &gce_api.InstanceProperties{
+					MachineType: "n2-standard-4",
+					Disks: []*gce_api.AttachedDisk{
+						{
+							Boot: true,
+							InitializeParams: &gce_api.AttachedDiskInitializeParams{
+								DiskSizeGb: 100,
+							},
+						},
+					},
+				},
+			}
+			tb := &GkeTemplateBuilder{}
+			migOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), tc.nodeVersion, false)
+			node, err := tb.BuildNodeFromTemplate(t.Context(), mig, migOsInfo, template, gce.KubeEnv{}, 4, 16*GiB, nil, &gce.GceReserved{}, localssdsize.NewSimpleLocalSSDProvider())
+			if err != nil {
+				t.Fatalf("BuildNodeFromTemplate(nodeVersion=%q) unexpected error: %v", tc.nodeVersion, err)
+			}
+			if got := node.Status.NodeInfo.KubeletVersion; got != tc.wantKubeletVersion {
+				t.Errorf("BuildNodeFromTemplate(nodeVersion=%q) KubeletVersion = %q, want %q", tc.nodeVersion, got, tc.wantKubeletVersion)
+			}
+		})
+	}
+}
