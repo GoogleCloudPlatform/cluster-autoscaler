@@ -35,11 +35,6 @@ excluded_paths=(
 # Files and directories (e.g. copied from upstream sigs.k8s.io/cluster-autoscaler) whose copyright
 # headers must be attributed to "The Kubernetes Authors" instead of "Google LLC".
 kubernetes_authors_paths=(
-  # TODO(b/571005331): Temporary copies from upstream sigs.k8s.io/cluster-autoscaler retaining "Copyright The Kubernetes Authors."
-  "pkg/processors/capacitybuffers/autoscaling_status_processor.go"
-  "pkg/processors/capacitybuffers/autoscaling_status_processor_test.go"
-  "pkg/processors/capacitybuffers/ready_replicas_controller.go"
-  "pkg/processors/capacitybuffers/ready_replicas_controller_test.go"
   # GCE cloud provider synced from upstream sigs.k8s.io/cluster-autoscaler.
   "pkg/cloudprovider/gce"
 )

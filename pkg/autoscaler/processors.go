@@ -27,6 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
 	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
+	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/controller"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/provreq"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqclient"
@@ -741,15 +742,15 @@ func (b *Builder) setUpProcessors(
 	}
 
 	var cbPodInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
-	var cbAutoscalingStatusProcessor *capacitybuffers.CapacityBufferAutoscalingStatusProcessor
+	var cbAutoscalingStatusProcessor *cbprocessors.CapacityBufferAutoscalingStatusProcessor
 	if options.CapacitybufferPodInjectionEnabled && cbReady {
 		cbPodInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffer.ActiveProvisioningStrategy}, capacitybufferPodsRegistry, true)
 		if options.CapacityBufferReadyReplicasEnabled {
-			readyReplicasController := capacitybuffers.NewReadyReplicasController(manager.GetClient())
+			readyReplicasController := controller.NewReadyReplicasController(manager.GetClient())
 			if err := readyReplicasController.SetupWithManager(manager); err != nil {
 				return nil, fmt.Errorf("failed to setup CapacityBuffer ReadyReplicas controller: %w", err)
 			}
-			cbAutoscalingStatusProcessor = capacitybuffers.NewCapacityBufferAutoscalingStatusProcessor(readyReplicasController, capacitybufferPodsRegistry)
+			cbAutoscalingStatusProcessor = cbprocessors.NewCapacityBufferAutoscalingStatusProcessor(readyReplicasController, capacitybufferPodsRegistry)
 		}
 	}
 
