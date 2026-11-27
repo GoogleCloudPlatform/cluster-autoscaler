@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1307,6 +1308,133 @@ func TestTotalMigSize(t *testing.T) {
 	assert.Equal(t, napMaxNodes, migs[0].MinSize(context.TODO()))
 	assert.Equal(t, napMaxNodes, migs[1].MinSize(context.TODO()))
 	assert.Equal(t, napMaxNodes, migs[2].MinSize(context.TODO()))
+	mock.AssertExpectationsForObjects(t, gkeManagerMock)
+}
+
+func TestGkeNodePoolMigs(t *testing.T) {
+	zones := []string{"us-central1-a", "us-central1-b", "us-central1-c"}
+	testCases := []struct {
+		name         string
+		blockedZones map[string]bool
+		wantZones    []string
+	}{
+		{
+			name:      "no blocked migs",
+			wantZones: []string{"us-central1-a", "us-central1-b", "us-central1-c"},
+		},
+		{
+			name:         "first mig blocked",
+			blockedZones: map[string]bool{"us-central1-a": true},
+			wantZones:    []string{"us-central1-b", "us-central1-c"},
+		},
+		{
+			name:         "middle mig blocked",
+			blockedZones: map[string]bool{"us-central1-b": true},
+			wantZones:    []string{"us-central1-a", "us-central1-c"},
+		},
+		{
+			name:         "last mig blocked",
+			blockedZones: map[string]bool{"us-central1-c": true},
+			wantZones:    []string{"us-central1-a", "us-central1-b"},
+		},
+		{
+			name:         "all migs blocked",
+			blockedZones: map[string]bool{"us-central1-a": true, "us-central1-b": true, "us-central1-c": true},
+			wantZones:    []string{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gkeManagerMock := &GkeManagerMock{}
+			migs := make([]*GkeMig, 0, len(zones))
+			for _, z := range zones {
+				m := &GkeMig{
+					gceRef: gce.GceRef{
+						Project: "project1",
+						Zone:    z,
+						Name:    "default-pool",
+					},
+					gkeManager: gkeManagerMock,
+					exist:      true,
+				}
+				migs = append(migs, m)
+				gkeManagerMock.On("IsMigBlocked", m.GceRef()).Return(tc.blockedZones[z])
+			}
+			wantAllMigs := slices.Clone(migs)
+			np := AddMigsToNodePool("default-pool", migs...)
+
+			assert.Equal(t, wantAllMigs, np.allMigs())
+			gkeManagerMock.AssertNotCalled(t, "IsMigBlocked", mock.Anything)
+
+			got := np.Migs()
+			gotZones := make([]string, 0, len(got))
+			for _, m := range got {
+				gotZones = append(gotZones, m.GceRef().Zone)
+			}
+			assert.Equal(t, tc.wantZones, gotZones)
+			assert.Equal(t, wantAllMigs, np.allMigs())
+		})
+	}
+}
+
+func TestGkeNodePoolMigsNilManager(t *testing.T) {
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Project: "project1",
+			Zone:    "us-central1-a",
+			Name:    "default-pool",
+		},
+		exist: true,
+	}
+	np := AddMigsToNodePool("default-pool", mig)
+	assert.Equal(t, []*GkeMig{mig}, np.Migs())
+}
+
+func TestNodePoolTargetSizeSkipsBlockedMigs(t *testing.T) {
+	gkeManagerMock := &GkeManagerMock{}
+
+	migA := &GkeMig{
+		gceRef:       gce.GceRef{Project: "project1", Zone: "us-central1-a", Name: "default-pool"},
+		gkeManager:   gkeManagerMock,
+		totalMinSize: 3,
+		totalMaxSize: 100,
+		maxSize:      napMaxNodes,
+		exist:        true,
+	}
+	migB := &GkeMig{
+		gceRef:       gce.GceRef{Project: "project1", Zone: "us-central1-b", Name: "default-pool"},
+		gkeManager:   gkeManagerMock,
+		totalMinSize: 3,
+		totalMaxSize: 100,
+		maxSize:      napMaxNodes,
+		exist:        true,
+	}
+	migC := &GkeMig{
+		gceRef:       gce.GceRef{Project: "project1", Zone: "us-central1-c", Name: "default-pool"},
+		gkeManager:   gkeManagerMock,
+		totalMinSize: 3,
+		totalMaxSize: 100,
+		maxSize:      napMaxNodes,
+		exist:        true,
+	}
+	AddMigsToNodePool("default-pool", migA, migB, migC)
+
+	gkeManagerMock.On("IsMigBlocked", migA.GceRef()).Return(true)
+	gkeManagerMock.On("IsMigBlocked", migB.GceRef()).Return(false)
+	gkeManagerMock.On("IsMigBlocked", migC.GceRef()).Return(false)
+
+	healthyRefs := []gce.GceRef{migB.GceRef(), migC.GceRef()}
+	gkeManagerMock.On("GetMigsTargetSize", healthyRefs).Return(int64(10), nil).Times(3)
+	gkeManagerMock.On("GetMigSize", migB).Return(int64(4), nil).Times(2)
+	gkeManagerMock.On("GetNumberOfSurgeNodesInMig", migB).Return(0).Once()
+
+	npSize, err := migB.NodePoolTargetSize()
+	assert.NoError(t, err)
+	assert.Equal(t, 10, npSize)
+	// otherMigsSize = 10 - 4 = 6; MaxSize = 100 - 6 = 94, MinSize = max(0, 3 - 6) = 0.
+	assert.Equal(t, 94, migB.MaxSize(t.Context()))
+	assert.Equal(t, 0, migB.MinSize(t.Context()))
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 }
 

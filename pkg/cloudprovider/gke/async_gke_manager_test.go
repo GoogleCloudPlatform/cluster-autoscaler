@@ -835,6 +835,29 @@ func TestAsyncMgr_DeleteNodePoolAsync(t *testing.T) {
 	})
 }
 
+func TestAsyncMgr_DeleteNodePoolAsyncIncludesBlockedSiblingMigs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		gkeManagerMock := &GkeManagerMock{}
+		migA := NewGkeMig(gce.GceRef{Project: "project", Zone: "us-central1-a", Name: "np-a"}, "", gkeManagerMock)
+		migB := NewGkeMig(gce.GceRef{Project: "project", Zone: "us-central1-b", Name: "np-b"}, "", gkeManagerMock)
+		AddMigsToNodePool("np-blocked-sibling", migA, migB)
+		gkeManagerMock.On("IsMigBlocked", migA.GceRef()).Return(false)
+		gkeManagerMock.On("IsMigBlocked", migB.GceRef()).Return(true)
+
+		finalizer := ctx.deleteNodePoolAsyncOrFail(migA)
+		assert.Equal(t, migA, ctx.asyncGkeManager.getScheduledMigLocked(migA.Id()))
+		assert.Equal(t, migB, ctx.asyncGkeManager.getScheduledMigLocked(migB.Id()))
+		assert.Empty(t, gkeManagerMock.Calls)
+
+		ctx.gkeManager.finalizeNodePoolDeletion(migA.NodePoolName())
+		asyncResult := finalizer.AwaitResultOrFail()
+		assert.NoError(t, asyncResult.Error)
+		assert.Equal(t, migRefs([]*GkeMig{migA, migB}), nodeGroupRefs(asyncResult.Migs))
+		ctx.assertNoOngoingNodePoolOps()
+	})
+}
+
 func TestAsyncMgr_DeleteNodePoolAsyncWithAsyncFailures(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := newAsyncGkeManagerTestContext(t)

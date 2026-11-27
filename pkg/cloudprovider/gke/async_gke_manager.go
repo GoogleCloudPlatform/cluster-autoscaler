@@ -714,7 +714,7 @@ func (m *asyncGkeManager) createTerminatingNodePool(mig *GkeMig, finalizer inter
 	m.scheduledMigs[mig.Id()] = mig
 
 	if np := mig.NodePool(); np != nil {
-		for _, gkeMig := range np.Migs() {
+		for _, gkeMig := range np.allMigs() {
 			if gkeMig.Id() != mig.Id() {
 				migs = append(migs, gkeMig)
 				m.scheduledMigs[gkeMig.Id()] = gkeMig

@@ -59,13 +59,17 @@ func (p *nodePoolAwareNodeGroupSetProcessor) otherNodePoolMigs(nodeGroup cloudpr
 		return nil, false
 	}
 	np := mig.NodePool()
-	if np == nil || len(np.Migs()) == 0 {
+	if np == nil {
 		return nil, false
 	}
-	// np.Migs() contains all node groups from the same node pool, including the node group itself.
+	migs := np.Migs()
+	if len(migs) == 0 {
+		return []cloudprovider.NodeGroup{}, true
+	}
+	// migs contains all unblocked node groups from the same node pool, including the node group itself.
 	// This code filters out the node group itself.
-	otherMigs := make([]cloudprovider.NodeGroup, 0, len(np.Migs())-1)
-	for _, ng := range np.Migs() {
+	otherMigs := make([]cloudprovider.NodeGroup, 0, len(migs)-1)
+	for _, ng := range migs {
 		if ng.Id() != nodeGroup.Id() {
 			otherMigs = append(otherMigs, ng)
 		}

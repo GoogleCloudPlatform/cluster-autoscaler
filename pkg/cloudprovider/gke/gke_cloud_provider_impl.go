@@ -1223,7 +1223,32 @@ func (g *GkeNodePool) Name() string {
 	return g.name
 }
 
+// Migs returns the unblocked MIGs belonging to this node pool.
+//
+// MIGs can become blocked after AddMigsToNodePool populates g.migs (either
+// during template validation in refreshNodePools or mid-loop on 404/5xx
+// errors). Filtering here keeps node-pool lookups consistent with
+// migLister.GetGkeMigs without mutating the shared slice.
 func (g *GkeNodePool) Migs() []*GkeMig {
+	for i, mig := range g.migs {
+		if mig.isBlocked() {
+			unblocked := make([]*GkeMig, 0, len(g.migs)-1)
+			unblocked = append(unblocked, g.migs[:i]...)
+			for _, rest := range g.migs[i+1:] {
+				if !rest.isBlocked() {
+					unblocked = append(unblocked, rest)
+				}
+			}
+			return unblocked
+		}
+	}
+	return g.migs
+}
+
+// allMigs returns all MIGs belonging to this node pool, including any that have
+// since been marked blocked. Unlike Migs, it does not query the blocklist cache
+// and is safe to call while holding manager locks.
+func (g *GkeNodePool) allMigs() []*GkeMig {
 	return g.migs
 }
 
@@ -1731,7 +1756,7 @@ func (mig *GkeMig) NodePoolTargetSize() (int, error) {
 	var candidateMigs []*GkeMig
 
 	if mig.nodePool != nil {
-		candidateMigs = mig.nodePool.migs
+		candidateMigs = mig.nodePool.Migs()
 	} else {
 		klog.Warningf("GkeMig.nodePool is nil for %s, falling back to O(N) lookup. This should not happen in production.", mig.Id())
 		for _, m := range mig.gkeManager.GetGkeMigs() {
@@ -2434,6 +2459,10 @@ func (mig *GkeMig) IsExtendedFallbacksEnabled() bool {
 // GetMig returns the *GkeMig object
 func (mig *GkeMig) GetMig() *GkeMig {
 	return mig
+}
+
+func (mig *GkeMig) isBlocked() bool {
+	return mig != nil && mig.gkeManager != nil && mig.gkeManager.IsMigBlocked(mig.GceRef())
 }
 
 type Config struct {

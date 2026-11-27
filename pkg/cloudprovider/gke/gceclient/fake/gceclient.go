@@ -676,7 +676,10 @@ func (g *GceClient) FetchMig(ctx context.Context, ref gceinternal.GceRef) (*gcev
 	if mig, found := g.migs[key]; found {
 		return cloneMig(mig), nil
 	}
-	return nil, fmt.Errorf("MIG %s in zone %s not found in fake GCE", ref.Name, ref.Zone)
+	return nil, &googleapi.Error{
+		Code:    http.StatusNotFound,
+		Message: fmt.Sprintf("MIG %s in zone %s not found in fake GCE", ref.Name, ref.Zone),
+	}
 }
 
 func (g *GceClient) FetchAllInstances(ctx context.Context, project, zone string, filter string) ([]gceinternal.GceInstance, error) {

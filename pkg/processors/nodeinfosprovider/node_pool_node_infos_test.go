@@ -241,6 +241,15 @@ func TestUpdateNodeInfosWithinNodePools(t *testing.T) {
 		threeZoneMigs[3],
 	}
 
+	gkeManagerMock := &gke.GkeManagerMock{}
+	blockedMig := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRefName("pool-1-zone-a").SetMaxSize(10).SetExist(true).SetNodePoolName("pool-1").Build()
+	unblockedTemplateMig := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRefName("pool-1-zone-b").SetMaxSize(10).SetExist(true).SetNodePoolName("pool-1").Build()
+	unblockedRealMig := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRefName("pool-1-zone-c").SetMaxSize(10).SetExist(true).SetNodePoolName("pool-1").Build()
+	gke.AddMigsToNodePool("pool-1", blockedMig, unblockedTemplateMig, unblockedRealMig)
+	gkeManagerMock.On("IsMigBlocked", blockedMig.GceRef()).Return(true)
+	gkeManagerMock.On("IsMigBlocked", unblockedTemplateMig.GceRef()).Return(false)
+	gkeManagerMock.On("IsMigBlocked", unblockedRealMig.GceRef()).Return(false)
+
 	testTemplateLabels := map[string]string{
 		"template-specific-label": "true",
 		"common-label":            "template",
@@ -460,6 +469,26 @@ func TestUpdateNodeInfosWithinNodePools(t *testing.T) {
 			},
 			nodeInfos:         map[string]*framework.NodeInfo{},
 			expectedNodeInfos: map[string]*framework.NodeInfo{},
+		},
+		{
+			name: "multi-MIG node pool skips blocked sibling MIG",
+			migs: []cloudprovider.NodeGroup{unblockedTemplateMig, unblockedRealMig},
+			templateLabels: map[string]map[string]string{
+				unblockedTemplateMig.Id(): testTemplateLabels,
+				unblockedRealMig.Id():     testTemplateLabels,
+			},
+			templateTaints: map[string][]apiv1.Taint{
+				unblockedTemplateMig.Id(): testTemplateTaints,
+				unblockedRealMig.Id():     testTemplateTaints,
+			},
+			nodeInfos: map[string]*framework.NodeInfo{
+				unblockedTemplateMig.Id(): createTestTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				unblockedRealMig.Id():     createTestCorrectNodeInfo("pool-1-zone-c-node-123", "zone-c"),
+			},
+			expectedNodeInfos: map[string]*framework.NodeInfo{
+				unblockedTemplateMig.Id(): createTestAugmentedTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				unblockedRealMig.Id():     createTestCorrectNodeInfo("pool-1-zone-c-node-123", "zone-c"),
+			},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

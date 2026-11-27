@@ -22,7 +22,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
@@ -101,5 +104,97 @@ func TestBlockedMigCachingBypass(t *testing.T) {
 		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "unschedulable-pod", metav1.GetOptions{})
 		assert.NoError(t, err)
 		assert.Empty(t, updatedPod.Spec.NodeName, "Expected unschedulable-pod to remain unscheduled")
+	})
+}
+
+// TestBlockedMigInMultiZoneNodePoolWithTotalMaxSize verifies that when one zonal
+// MIG in a multi-zone node pool with total size limits is deleted and becomes
+// blocked mid-loop (before ClusterRefreshInterval), healthy sibling MIGs stop
+// issuing per-node FetchMig 404 calls for it and continue scaling normally.
+func TestBlockedMigInMultiZoneNodePoolWithTotalMaxSize(t *testing.T) {
+	const (
+		deletedZone   = "us-central1-a"
+		nodesPerZone  = 5
+		totalMinNodes = 1
+		totalMaxNodes = 100
+	)
+	zones := []string{deletedZone, "us-central1-b", "us-central1-c"}
+
+	withTotalSizeLimits := func(np *gke_api_beta.NodePool) *gke_api_beta.NodePool {
+		np.Autoscaling.MinNodeCount = 0
+		np.Autoscaling.MaxNodeCount = 0
+		np.Autoscaling.TotalMinNodeCount = totalMinNodes
+		np.Autoscaling.TotalMaxNodeCount = totalMaxNodes
+		return np
+	}
+
+	testConfig := integration.NewTestConfig().
+		WithOverrides(integration.WithBalanceSimilarNodeGroups()).
+		WithNodePools(integration.DefaultNodePool(
+			integration.WithNodePoolMachineType("n1-standard-4"),
+			integration.WithNodePoolSize(nodesPerZone),
+			integration.WithNodePoolLocations(zones...),
+			withTotalSizeLimits,
+		))
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer integration_synctest.TearDown(cancel)
+
+		infra := integration.SetupInfrastructure(ctx, t)
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		require.NoError(t, err)
+
+		// Initial run populates cluster state, caches, and nodePool.migs for all 3 zones.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+		initialNodes := infra.Fakes.K8s.Nodes().Items
+		require.Len(t, initialNodes, nodesPerZone*len(zones))
+
+		var deletedMigRef gce.GceRef
+		for _, mig := range infra.GkeCache.GetMigs() {
+			if mig.GceRef().Zone == deletedZone {
+				deletedMigRef = mig.GceRef()
+				break
+			}
+		}
+		require.NotEmpty(t, deletedMigRef.Name, "expected a registered MIG in %s", deletedZone)
+
+		// Delete the zonal MIG in GCE while GKE still lists it in InstanceGroupUrls
+		// and before ClusterRefreshInterval (1m) triggers refreshNodePools.
+		require.NoError(t, infra.Fakes.GceService.DeleteInstanceGroupManager(deletedMigRef.Zone, deletedMigRef.Name))
+
+		// Fill all existing nodes so scale-down checks run against every healthy node
+		// without deleting them, and so a subsequent pod triggers scale-up.
+		for i, node := range initialNodes {
+			fillerPod := tu.BuildTestPod(fmt.Sprintf("filler-pod-%d", i), 3500, 0)
+			fillerPod.Spec.NodeName = node.Name
+			infra.Fakes.K8s.AddPod(fillerPod)
+		}
+
+		// Loop 1 (+10s < ClusterRefreshInterval): deleted MIG hits 404s until blocked.
+		// Healthy siblings must stop querying it once blocked instead of firing one
+		// FetchMig 404 per healthy node (10 healthy nodes).
+		infra.Fakes.GceService.ResetCallCounts()
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Second)
+
+		assert.True(t, infra.GkeCache.IsMigBlocked(deletedMigRef), "deleted MIG should be blocked after 404 errors")
+		assert.LessOrEqual(t, infra.Fakes.GceService.FetchMigCalls(deletedMigRef), gke.MaxIrretrievableErrsBeforeBlocked,
+			"expected at most %d FetchMig calls to block the deleted MIG, not per-node 404s from healthy siblings",
+			gke.MaxIrretrievableErrsBeforeBlocked)
+
+		// Loop 2 (+10s, still < ClusterRefreshInterval so nodePool.migs was not rebuilt):
+		// Add an unschedulable pod and verify 0 FetchMig calls for the blocked MIG
+		// and that healthy siblings can still scale up.
+		unschedulablePod := tu.BuildTestPod("unschedulable-pod", 3000, 0, tu.MarkUnschedulable())
+		infra.Fakes.K8s.AddPod(unschedulablePod)
+
+		infra.Fakes.GceService.ResetCallCounts()
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Second)
+
+		assert.Equal(t, 0, infra.Fakes.GceService.FetchMigCalls(deletedMigRef),
+			"expected 0 FetchMig calls for already-blocked MIG before ClusterRefreshInterval")
+		assert.Greater(t, len(infra.Fakes.K8s.Nodes().Items), len(initialNodes),
+			"healthy sibling MIGs should scale up despite a blocked sibling in the same node pool")
 	})
 }

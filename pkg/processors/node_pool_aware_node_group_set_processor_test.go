@@ -39,7 +39,22 @@ func TestGetsOtherNodeGroupsInSameNodePool(t *testing.T) {
 	gke.AddMigsToNodePool("wonderful-pool", migA, migB)
 	gke.AddMigsToNodePool("other-pool", migC)
 
-	migs := []*gke.GkeMig{migA, migB, migC}
+	gkeManagerMock := &gke.GkeManagerMock{}
+	migBlocked := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRef(gce.GceRef{Project: "project", Zone: "zone-1", Name: "test-blocked"}).Build()
+	migHealthy1 := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRef(gce.GceRef{Project: "project", Zone: "zone-2", Name: "test-healthy-1"}).Build()
+	migHealthy2 := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRef(gce.GceRef{Project: "project", Zone: "zone-3", Name: "test-healthy-2"}).Build()
+	gke.AddMigsToNodePool("pool-with-blocked", migBlocked, migHealthy1, migHealthy2)
+	gkeManagerMock.On("IsMigBlocked", migBlocked.GceRef()).Return(true)
+	gkeManagerMock.On("IsMigBlocked", migHealthy1.GceRef()).Return(false)
+	gkeManagerMock.On("IsMigBlocked", migHealthy2.GceRef()).Return(false)
+
+	migAllBlocked1 := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRef(gce.GceRef{Project: "project", Zone: "zone-1", Name: "test-all-blocked-1"}).Build()
+	migAllBlocked2 := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetGceRef(gce.GceRef{Project: "project", Zone: "zone-2", Name: "test-all-blocked-2"}).Build()
+	gke.AddMigsToNodePool("all-blocked-pool", migAllBlocked1, migAllBlocked2)
+	gkeManagerMock.On("IsMigBlocked", migAllBlocked1.GceRef()).Return(true)
+	gkeManagerMock.On("IsMigBlocked", migAllBlocked2.GceRef()).Return(true)
+
+	migs := []*gke.GkeMig{migA, migB, migC, migHealthy1, migHealthy2, migAllBlocked1, migAllBlocked2}
 
 	tests := []struct {
 		name  string
@@ -55,6 +70,16 @@ func TestGetsOtherNodeGroupsInSameNodePool(t *testing.T) {
 			name:  "two nodegroups in a nodepool",
 			input: migA,
 			want:  []cloudprovider.NodeGroup{migB},
+		},
+		{
+			name:  "blocked sibling nodegroup is skipped",
+			input: migHealthy1,
+			want:  []cloudprovider.NodeGroup{migHealthy2},
+		},
+		{
+			name:  "all nodegroups in a nodepool blocked",
+			input: migAllBlocked1,
+			want:  []cloudprovider.NodeGroup{},
 		},
 	}
 	for _, test := range tests {
