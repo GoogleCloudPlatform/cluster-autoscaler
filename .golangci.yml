@@ -28,4 +28,4 @@ linters:
   - misspell
 
 issues:
-  new-from-rev: HEAD
+  new-from-rev: HEAD~
